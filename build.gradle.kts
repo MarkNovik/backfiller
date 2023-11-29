@@ -15,8 +15,7 @@ repositories {
 }
 
 dependencies {
-    implementation(compose.desktop.windows_x64)
-    implementation(compose.desktop.linux_x64)
+    implementation(compose.desktop.currentOs)
 }
 
 compose.desktop {
@@ -24,7 +23,7 @@ compose.desktop {
         mainClass = "MainKt"
 
         nativeDistributions {
-            targetFormats(TargetFormat.Exe, TargetFormat.AppImage)
+            targetFormats(TargetFormat.Exe)
             packageName = "backfiller"
             packageVersion = "1.0.0"
         }
