@@ -16,6 +16,7 @@ repositories {
 
 dependencies {
     implementation(compose.desktop.currentOs)
+    implementation("com.darkrockstudios:mpfilepicker:3.1.0")
 }
 
 compose.desktop {
