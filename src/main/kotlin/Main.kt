@@ -21,10 +21,13 @@ import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import com.darkrockstudios.libraries.mpfilepicker.DirectoryPicker
 import com.darkrockstudios.libraries.mpfilepicker.MultipleFilePicker
+import java.awt.geom.AffineTransform
+import java.awt.image.AffineTransformOp
 import java.awt.image.BufferedImage
 import java.io.File
 import javax.imageio.ImageIO
 import kotlin.concurrent.thread
+import kotlin.math.PI
 import kotlin.random.Random
 import kotlin.random.nextInt
 
@@ -40,6 +43,7 @@ fun generateRandomImage(
     h: Int,
     size: Float,
     density: Float,
+    rotation: Double
 ): BufferedImage = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB).apply {
     val stepX = (1 / density).toInt() * STEP_MULTIPLIER
     val stepY = (1 / density).toInt() * STEP_MULTIPLIER
@@ -47,16 +51,22 @@ fun generateRandomImage(
         for (y in 0..<h step stepY) {
             val nx = x + Random.nextInt((-stepX / 2)..(stepX / 2))
             val ny = y + Random.nextInt((-stepY / 2)..(stepY / 2))
-            //if (Random.nextDouble() < density)
             fill.randomOrNull()?.let { img ->
-                draw(img, nx, ny, (img.width * size).toInt(), (img.height * size).toInt(), .5, .5)
+                draw(img, nx, ny, (img.width * size).toInt(), (img.height * size).toInt(), rotation, .5, .5)
             }
         }
     }
 }
 
 fun BufferedImage.draw(
-    img: BufferedImage, startX: Int, startY: Int, w: Int, h: Int, anchorX: Double = 0.0, anchorY: Double = 0.0
+    src: BufferedImage,
+    startX: Int,
+    startY: Int,
+    w: Int,
+    h: Int,
+    rotation: Double,
+    anchorX: Double = 0.0,
+    anchorY: Double = 0.0
 ) {
     if (w == 0 || h == 0) return
     if (w < 0 || h < 0) error("Negative w or h are unsupported")
@@ -64,6 +74,9 @@ fun BufferedImage.draw(
     if (anchorY !in 0.0..1.0) error("Anchor is relative so it must be in 0..1 range")
     val x = startX - (w * anchorX).toInt()
     val y = startY - (h * anchorY).toInt()
+    val img =
+        if (Random.nextBoolean() && rotation != 0.0) src.rotate(Random.nextDouble(-rotation, rotation))
+        else src
     for (dx in 0 until w) {
         for (dy in 0 until h) {
             val setX = (x + dx).takeIf { it in 0 until width } ?: continue
@@ -75,6 +88,13 @@ fun BufferedImage.draw(
         }
     }
 }
+
+fun BufferedImage.rotate(radians: Double): BufferedImage =
+    AffineTransformOp(AffineTransform().apply {
+        translate(width / 2.0, height / 2.0)
+        rotate(radians)
+        translate(-width / 2.0, -height / 2.0)
+    }, AffineTransformOp.TYPE_BICUBIC).filter(this, null)
 
 inline fun <T : Any> runOrNull(block: () -> T): T? = try {
     block()
@@ -89,6 +109,7 @@ fun main() = application {
     val readImgs = remember { mutableStateListOf<BufferedImage>() }
     var sizeMul by remember { mutableFloatStateOf(1f) }
     var density by remember { mutableFloatStateOf(.5f) }
+    var rotation by remember { mutableDoubleStateOf(0.0) }
     var fileReading: Thread? by remember { mutableStateOf(null) }
     var generating: Thread? by remember { mutableStateOf(null) }
     var saving: Thread? by remember { mutableStateOf(null) }
@@ -105,7 +126,7 @@ fun main() = application {
         generating?.interrupt()
         status = "Generating..."
         generating = thread {
-            res = generateRandomImage(readImgs, resW, resH, sizeMul, density)
+            res = generateRandomImage(readImgs, resW, resH, sizeMul, density, rotation)
             status = "Done"
         }
     }
@@ -164,6 +185,16 @@ fun main() = application {
                     Text("Density", modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
                     Slider(density, { density = it }, valueRange = .1f..0.9f, modifier = Modifier.weight(5f))
                     Text(density.toString(), Modifier.weight(.5f), maxLines = 1, textAlign = TextAlign.Center)
+                }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Random rotation", modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
+                    Slider(
+                        rotation.toFloat(),
+                        { rotation = it.toDouble() },
+                        valueRange = 0f..(2f * PI.toFloat()),
+                        modifier = Modifier.weight(5f)
+                    )
+                    Text("%.2f°".format(Math.toDegrees(rotation)), Modifier.weight(.5f), maxLines = 1, textAlign = TextAlign.Center)
                 }
                 Row {
                     TextField(resW.toString(),
