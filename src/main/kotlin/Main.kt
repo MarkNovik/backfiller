@@ -1,17 +1,12 @@
+//import styles.lightScheme
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material.Button
-import androidx.compose.material.Slider
-import androidx.compose.material.Text
-import androidx.compose.material.TextField
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpSize
@@ -21,6 +16,8 @@ import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import com.darkrockstudios.libraries.mpfilepicker.DirectoryPicker
 import com.darkrockstudios.libraries.mpfilepicker.MultipleFilePicker
+import kotlinx.coroutines.*
+import styles.ui.theme.AppTheme
 import java.awt.geom.AffineTransform
 import java.awt.image.AffineTransformOp
 import java.awt.image.BufferedImage
@@ -31,10 +28,27 @@ import kotlin.math.PI
 import kotlin.random.Random
 import kotlin.random.nextInt
 
-const val STEP_MULTIPLIER = 20
+const val STEP_MULTIPLIER = 25
+const val SLIDER_WEIGHT = 5f
+const val SLIDER_VALUE_WEIGHT = .7f
+const val SLIDER_LABEL_WEIGHT = 1.3f
 
 enum class Picking {
     None, File, Dir
+}
+
+var points: List<Pair<Int, Int>> = emptyList()
+
+fun generatePoints(density: Float, w: Int, h: Int, random: Random = Random) {
+    val stepX = (1 / density).toInt() * STEP_MULTIPLIER
+    val stepY = (1 / density).toInt() * STEP_MULTIPLIER
+    points = (0..<w step stepX).flatMap { x ->
+        (0..<h step stepY).map { y ->
+            val nx = x + random.nextInt((-stepX / 2)..(stepX / 2))
+            val ny = y + random.nextInt((-stepY / 2)..(stepY / 2))
+            nx to ny
+        }
+    }
 }
 
 fun generateRandomImage(
@@ -42,18 +56,13 @@ fun generateRandomImage(
     w: Int,
     h: Int,
     size: Float,
-    density: Float,
-    rotation: Double
+    rotation: Float,
+    sizeDeviation: Int,
 ): BufferedImage = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB).apply {
-    val stepX = (1 / density).toInt() * STEP_MULTIPLIER
-    val stepY = (1 / density).toInt() * STEP_MULTIPLIER
-    for (x in 0..<w step stepX) {
-        for (y in 0..<h step stepY) {
-            val nx = x + Random.nextInt((-stepX / 2)..(stepX / 2))
-            val ny = y + Random.nextInt((-stepY / 2)..(stepY / 2))
-            fill.randomOrNull()?.let { img ->
-                draw(img, nx, ny, (img.width * size).toInt(), (img.height * size).toInt(), rotation, .5, .5)
-            }
+    points.forEach { (x, y) ->
+        val ds = size + size * (Random.nextInt((-sizeDeviation)..sizeDeviation) / 100f)
+        fill.randomOrNull()?.let { img ->
+            draw(img, x, y, (img.width * ds).toInt(), (img.height * ds).toInt(), rotation, .5, .5)
         }
     }
 }
@@ -64,7 +73,7 @@ fun BufferedImage.draw(
     startY: Int,
     w: Int,
     h: Int,
-    rotation: Double,
+    rotation: Float,
     anchorX: Double = 0.0,
     anchorY: Double = 0.0
 ) {
@@ -75,7 +84,8 @@ fun BufferedImage.draw(
     val x = startX - (w * anchorX).toInt()
     val y = startY - (h * anchorY).toInt()
     val img =
-        if (Random.nextBoolean() && rotation != 0.0) src.rotate(Random.nextDouble(-rotation, rotation))
+        if (Random.nextBoolean() && rotation != 0f)
+            src.rotate(Random.nextDouble(-rotation.toDouble(), rotation.toDouble()))
         else src
     for (dx in 0 until w) {
         for (dy in 0 until h) {
@@ -83,7 +93,7 @@ fun BufferedImage.draw(
             val setY = (y + dy).takeIf { it in 0 until height } ?: continue
             val getX = (img.width.toDouble() / w * dx).takeIf { it < img.width }?.toInt() ?: continue
             val getY = (img.height.toDouble() / h * dy).takeIf { it < img.height }?.toInt() ?: continue
-            val rgb = img.getRGB(getX, getY).takeIf { (it shr 24) and 0xFF != 0 } ?: continue
+            val rgb = img.getRGB(getX, getY).takeIf { (it shr 24) and 0xFF > 0x0F } ?: continue
             setRGB(setX, setY, rgb)
         }
     }
@@ -102,163 +112,229 @@ inline fun <T : Any> runOrNull(block: () -> T): T? = try {
     null
 }
 
+val windowState = WindowState(
+    size = DpSize(
+        width = 1200.dp,
+        height = 600.dp
+    )
+)
+
+@OptIn(ExperimentalCoroutinesApi::class, DelicateCoroutinesApi::class)
+val taskPool = newSingleThreadContext("App pool")
+val tasks = CoroutineScope(taskPool)
+
+@OptIn(ExperimentalMaterial3Api::class)
 fun main() = application {
     var path by remember { mutableStateOf("C:\\") }
     var outDir by remember { mutableStateOf("") }
     var outName by remember { mutableStateOf("generated.png") }
     val readImgs = remember { mutableStateListOf<BufferedImage>() }
-    var sizeMul by remember { mutableFloatStateOf(1f) }
+    var size by remember { mutableFloatStateOf(1f) }
     var density by remember { mutableFloatStateOf(.5f) }
-    var rotation by remember { mutableDoubleStateOf(0.0) }
+    var angleDeviation by remember { mutableFloatStateOf(0f) }
+    var sizeDeviation by remember { mutableIntStateOf(0) }
     var fileReading: Thread? by remember { mutableStateOf(null) }
-    var generating: Thread? by remember { mutableStateOf(null) }
-    var saving: Thread? by remember { mutableStateOf(null) }
+    var generating: Job by remember { mutableStateOf(tasks.launch {}) }
+    var saving: Job = remember { tasks.launch {} }
     var resW by remember { mutableIntStateOf(1000) }
     var resH by remember { mutableIntStateOf(1000) }
-    var status by remember { mutableStateOf("Idle") }
     var res by remember {
         mutableStateOf(BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB))
     }
     var picking by remember { mutableStateOf(Picking.None) }
     var pickingOut by remember { mutableStateOf(false) }
-
     fun regen() {
-        generating?.interrupt()
-        status = "Generating..."
-        generating = thread {
-            res = generateRandomImage(readImgs, resW, resH, sizeMul, density, rotation)
-            status = "Done"
+        generating.cancel("Regenerating")
+        generating = tasks.launch(taskPool) {
+            res = generateRandomImage(readImgs, resW, resH, size, angleDeviation, sizeDeviation)
         }
     }
-    MultipleFilePicker(picking == Picking.File, path, listOf("png, jpeg"), "Select a picture") { list ->
-        list?.let { files ->
-            path = files.joinToString(", ") { File(it.path).name }
-            fileReading?.interrupt()
-            fileReading = thread {
-                readImgs.clear()
-                readImgs.addAll(files.mapNotNull { file ->
-                    runOrNull { ImageIO.read(File(file.path)) }
-                })
-            }
-        }
-        picking = Picking.None
-    }
-    DirectoryPicker(picking == Picking.Dir, path, "Select a directory") { p ->
-        p?.let {
-            path = it
-            fileReading?.interrupt()
-            fileReading = thread {
-                readImgs.clear()
-                readImgs.addAll(File(path).listFiles()?.filterNotNull()?.filter(File::isFile)
-                    ?.mapNotNull { runOrNull { ImageIO.read(it) } } ?: emptyList())
-            }
-        }
-        picking = Picking.None
-    }
-    DirectoryPicker(pickingOut, outDir, "Select output folder") { p ->
-        p?.let { outDir = it }
-        pickingOut = false
-    }
-    Window(
-        title = "BackFiller", onCloseRequest = ::exitApplication, state = WindowState(
-            size = DpSize(1200.dp, 600.dp)
-        )
-    ) {
-        Row {
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
-                TextField(path,
-                    {}, readOnly = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Input image(s)") })
-                Row {
-                    Button({ picking = Picking.File }, modifier = Modifier.weight(1f)) { Text("Select file(s)") }
-                    Button({ picking = Picking.Dir }, modifier = Modifier.weight(1f)) { Text("Select a directory") }
-                }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Size", modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
-                    Slider(sizeMul, { sizeMul = it }, valueRange = 0f..2f, modifier = Modifier.weight(5f))
-                    Text(sizeMul.toString(), Modifier.weight(.5f), maxLines = 1, textAlign = TextAlign.Center)
-                }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Density", modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
-                    Slider(density, { density = it }, valueRange = .1f..0.9f, modifier = Modifier.weight(5f))
-                    Text(density.toString(), Modifier.weight(.5f), maxLines = 1, textAlign = TextAlign.Center)
-                }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Random rotation", modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
-                    Slider(
-                        rotation.toFloat(),
-                        { rotation = it.toDouble() },
-                        valueRange = 0f..(2f * PI.toFloat()),
-                        modifier = Modifier.weight(5f)
-                    )
-                    Text("%.2f°".format(Math.toDegrees(rotation)), Modifier.weight(.5f), maxLines = 1, textAlign = TextAlign.Center)
-                }
-                Row {
-                    TextField(resW.toString(),
-                        { resW = it.filter(Char::isDigit).toIntOrNull() ?: resW },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("Image width") })
-                    TextField(resH.toString(),
-                        { resH = it.filter(Char::isDigit).toIntOrNull() ?: resH },
-                        modifier = Modifier.weight(1f),
-                        label = { Text("Image height") })
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Button({ regen() }, modifier = Modifier.weight(1f)) {
-                        Text("Generate")
-                    }
-                    Text("Status: $status", modifier = Modifier.weight(.5f), textAlign = TextAlign.Center)
-                    Button({ generating?.interrupt(); status = "Cancelled" }, modifier = Modifier.weight(1f)) {
-                        Text("Cancel")
-                    }
-                }
-                Column {
-                    Row {
-                        TextField(
-                            outDir,
-                            {}, readOnly = true,
-                            label = { Text("Output directory") },
-                            modifier = Modifier.weight(1f)
-                        )
-                        TextField(
-                            outName,
-                            { outName = it },
-                            label = { Text("Generated image name") },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
+    AppTheme(darkTheme = false) {
+        Window(
+            title = "BackFiller", onCloseRequest = ::exitApplication, state = windowState
+        ) {
+            Row(modifier = Modifier.background(MaterialTheme.colorScheme.background)) {
+                Column(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    TextField(path,
+                        {}, readOnly = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Input image(s)") })
                     Row {
                         Button(
-                            { pickingOut = true }, modifier = Modifier.weight(1f)
-                        ) { Text("Select output directory") }
-                        Button(modifier = Modifier.weight(1f), onClick = {
-                            val file = File("$outDir/$outName")
-                            file.mkdirs()
-                            file.createNewFile()
-                            saving?.interrupt()
-                            saving = thread {
-                                status = "Saving"
-                                ImageIO.write(res, file.extension, file)
-                                status = "Saved"
+                            { picking = Picking.File },
+                            modifier = Modifier.weight(1f).padding(10.dp)
+                        ) { Text("Select file(s)") }
+                        Button(
+                            { picking = Picking.Dir },
+                            modifier = Modifier.weight(1f).padding(10.dp)
+                        ) { Text("Select a directory") }
+                    }
+                    ParamSlider(
+                        label = "Size",
+                        value = size,
+                        valueRange = 0f..2f,
+                        onValueChange = { size = it; regen() },
+                        indicator = size.toString()
+                    )
+                    ParamSlider(
+                        label = "Density",
+                        value = density,
+                        valueRange = .1f..0.9f,
+                        onValueChange = { density = it },
+                        indicator = density.toString()
+                    )
+                    ParamSlider(
+                        label = "Angle deviation",
+                        value = angleDeviation,
+                        valueRange = 0f..(PI * 2).toFloat(),
+                        onValueChange = { angleDeviation = it; regen() },
+                        indicator = "±%.2f°".format(Math.toDegrees(angleDeviation.toDouble()))
+                    )
+                    ParamSlider(
+                        label = "Size deviation",
+                        value = sizeDeviation.toFloat(),
+                        valueRange = 0f..50f,
+                        steps = 50,
+                        onValueChange = { sizeDeviation = it.toInt(); regen() },
+                        indicator = "±$sizeDeviation%"
+                    )
+                    Row {
+                        TextField(resW.toString(),
+                            { resW = it.filter(Char::isDigit).toIntOrNull() ?: resW },
+                            modifier = Modifier.weight(1f),
+                            label = { Text("Image width") })
+                        TextField(resH.toString(),
+                            { resH = it.filter(Char::isDigit).toIntOrNull() ?: resH },
+                            modifier = Modifier.weight(1f),
+                            label = { Text("Image height") })
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Button({
+                            generatePoints(density, resW, resH)
+                            regen()
+                        }, modifier = Modifier.weight(1f).padding(10.dp)) {
+                            Text("Generate")
+                        }
+                        Button(
+                            { generating.cancel("Generating cancelled") },
+                            modifier = Modifier.weight(1f).padding(10.dp)
+                        ) {
+                            Text("Cancel")
+                        }
+                    }
+                    Column {
+                        Row {
+                            TextField(
+                                outDir,
+                                {}, readOnly = true,
+                                label = { Text("Output directory") },
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextField(
+                                outName,
+                                { outName = it },
+                                label = { Text("Generated image name") },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Row {
+                            Button(
+                                { pickingOut = true }, modifier = Modifier.weight(1f).padding(10.dp)
+                            ) { Text("Select output directory") }
+                            Button(modifier = Modifier.weight(1f).padding(10.dp), onClick = {
+                                val file = File(outDir, outName)
+                                file.mkdirs()
+                                file.createNewFile()
+                                saving.cancel("Restarting saving")
+                                saving = tasks.launch(taskPool) {
+                                    ImageIO.write(res, file.extension, file)
+                                }
+                            }) {
+                                Text("Save")
                             }
-                        }) {
-                            Text("Save")
                         }
                     }
                 }
+                Box(
+                    modifier = Modifier.weight(1f).padding(10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        res.toComposeImageBitmap(),
+                        "Generated Image",
+                        modifier = Modifier.fillMaxSize().border(5.dp, color = MaterialTheme.colorScheme.secondary)
+                    )
+                    /*if (generating.isActive)
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.tertiary,
+                            strokeWidth = 10.dp,
+                            modifier = Modifier.size(100.dp)
+                        )*/
+                }
             }
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
-                Image(
-                    res.toComposeImageBitmap(),
-                    "Generated Image",
-                    modifier = Modifier.fillMaxSize().background(Color.LightGray)
-                )
+        }
+        MultipleFilePicker(picking == Picking.File, path, listOf("png, jpeg"), "Select a picture") { list ->
+            list?.let { files ->
+                path = files.joinToString(", ") { File(it.path).name }
+                fileReading?.interrupt()
+                fileReading = thread {
+                    readImgs.clear()
+                    readImgs.addAll(files.mapNotNull { file ->
+                        runOrNull { ImageIO.read(File(file.path)) }
+                    })
+                }
             }
+            picking = Picking.None
+        }
+        DirectoryPicker(picking == Picking.Dir, path, "Select a directory") { p ->
+            p?.let {
+                path = it
+                fileReading?.interrupt()
+                fileReading = thread {
+                    readImgs.clear()
+                    readImgs.addAll(File(path).listFiles()?.filterNotNull()?.filter(File::isFile)
+                        ?.mapNotNull { runOrNull { ImageIO.read(it) } } ?: emptyList())
+                }
+            }
+            picking = Picking.None
+        }
+        DirectoryPicker(pickingOut, outDir, "Select output folder") { p ->
+            p?.let { outDir = it }
+            pickingOut = false
         }
     }
 }
+
+@Composable
+fun ParamSlider(
+    label: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int = 0,
+    onValueChange: (Float) -> Unit,
+    indicator: String,
+): Unit =
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            modifier = Modifier.weight(SLIDER_LABEL_WEIGHT),
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Slider(
+            value,
+            onValueChange,
+            steps = steps,
+            valueRange = valueRange,
+            modifier = Modifier.weight(SLIDER_WEIGHT)
+        )
+        Text(
+            indicator,
+            Modifier.weight(SLIDER_VALUE_WEIGHT),
+            maxLines = 1,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
