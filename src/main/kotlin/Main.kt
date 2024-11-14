@@ -37,9 +37,13 @@ enum class Picking {
     None, File, Dir
 }
 
-var points: List<Pair<Int, Int>> = emptyList()
+val random = Random(30)
 
-fun generatePoints(density: Float, w: Int, h: Int, random: Random = Random) {
+var points: List<Pair<Int, Int>> = emptyList()
+var anglePower: List<Float> = emptyList()
+var sizePower: List<Float> = emptyList()
+
+fun randomize(density: Float, w: Int, h: Int, random: Random) {
     val stepX = (1 / density).toInt() * STEP_MULTIPLIER
     val stepY = (1 / density).toInt() * STEP_MULTIPLIER
     points = (0..<w step stepX).flatMap { x ->
@@ -49,9 +53,11 @@ fun generatePoints(density: Float, w: Int, h: Int, random: Random = Random) {
             nx to ny
         }
     }
+    anglePower = List(points.size) { random.nextFloat() }
+    sizePower = List(points.size) { (random.nextFloat() * 2) - 1 }
 }
 
-fun generateRandomImage(
+fun generateImage(
     fill: List<BufferedImage>,
     w: Int,
     h: Int,
@@ -59,10 +65,19 @@ fun generateRandomImage(
     rotation: Float,
     sizeDeviation: Int,
 ): BufferedImage = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB).apply {
-    points.forEach { (x, y) ->
-        val ds = size + size * (Random.nextInt((-sizeDeviation)..sizeDeviation) / 100f)
+    points.forEachIndexed { i, (x, y) ->
+        val ds = size + size * sizePower[i] * (sizeDeviation / 100f)
         fill.randomOrNull()?.let { img ->
-            draw(img, x, y, (img.width * ds).toInt(), (img.height * ds).toInt(), rotation, .5, .5)
+            draw(
+                img,
+                x,
+                y,
+                (img.width * ds).toInt(),
+                (img.height * ds).toInt(),
+                rotation * anglePower[i],
+                .5,
+                .5,
+            )
         }
     }
 }
@@ -75,7 +90,7 @@ fun BufferedImage.draw(
     h: Int,
     rotation: Float,
     anchorX: Double = 0.0,
-    anchorY: Double = 0.0
+    anchorY: Double = 0.0,
 ) {
     if (w == 0 || h == 0) return
     if (w < 0 || h < 0) error("Negative w or h are unsupported")
@@ -83,10 +98,7 @@ fun BufferedImage.draw(
     if (anchorY !in 0.0..1.0) error("Anchor is relative so it must be in 0..1 range")
     val x = startX - (w * anchorX).toInt()
     val y = startY - (h * anchorY).toInt()
-    val img =
-        if (Random.nextBoolean() && rotation != 0f)
-            src.rotate(Random.nextDouble(-rotation.toDouble(), rotation.toDouble()))
-        else src
+    val img = src.rotate(rotation.toDouble())
     for (dx in 0 until w) {
         for (dy in 0 until h) {
             val setX = (x + dx).takeIf { it in 0 until width } ?: continue
@@ -146,7 +158,7 @@ fun main() = application {
     fun regen() {
         generating.cancel("Regenerating")
         generating = tasks.launch(taskPool) {
-            res = generateRandomImage(readImgs, resW, resH, size, angleDeviation, sizeDeviation)
+            res = generateImage(readImgs, resW, resH, size, angleDeviation, sizeDeviation)
         }
     }
     AppTheme(darkTheme = false) {
@@ -212,7 +224,7 @@ fun main() = application {
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Button({
-                            generatePoints(density, resW, resH)
+                            randomize(density, resW, resH, random)
                             regen()
                         }, modifier = Modifier.weight(1f).padding(10.dp)) {
                             Text("Generate")
