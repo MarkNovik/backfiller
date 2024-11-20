@@ -1,14 +1,20 @@
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.onDrag
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowState
@@ -27,6 +33,7 @@ import kotlin.random.Random
 import kotlin.random.nextInt
 
 const val STEP_MULTIPLIER = 30
+
 const val SLIDER_WEIGHT = 5f
 const val SLIDER_VALUE_WEIGHT = .7f
 const val SLIDER_LABEL_WEIGHT = 1.3f
@@ -37,51 +44,53 @@ enum class Picking {
 
 val random = Random(30)
 
-@Immutable
 data class Element(
-    val x: Int, val y: Int, val anglePower: Float, val sizeDeviationPower: Float, val image: BufferedImage
+    val x: MutableState<Float>,
+    val y: MutableState<Float>,
+    val anglePower: Float,
+    val sizeDeviationPower: Float,
+    val image: BufferedImage
 )
 
-var elements = emptyList<Element>()
+var elements by mutableStateOf(emptyList<Element>())
 
 fun randomize(density: Float, w: Int, h: Int, images: List<BufferedImage>, random: Random) {
     val stepX = (1 / density).toInt() * STEP_MULTIPLIER
     val stepY = (1 / density).toInt() * STEP_MULTIPLIER
-    elements =
-        if (images.isEmpty()) emptyList()
-        else (0..<w step stepX).flatMap { x ->
-            (0..<h step stepY).map { y ->
-                val nx = x + random.nextInt((-stepX / 2)..(stepX / 2))
-                val ny = y + random.nextInt((-stepY / 2)..(stepY / 2))
-                Element(
-                    nx,
-                    ny,
-                    anglePower = random.nextFloat(),
-                    sizeDeviationPower = (random.nextFloat() * 2) - 1,
-                    image = images.random(random)
-                )
-            }
+    elements = if (images.isEmpty()) emptyList()
+    else (0..<w step stepX).flatMap { x ->
+        (0..<h step stepY).map { y ->
+            val nx = (x + random.nextInt((-stepX / 2)..(stepX / 2))) / w.toFloat()
+            val ny = (y + random.nextInt((-stepY / 2)..(stepY / 2))) / h.toFloat()
+            Element(
+                mutableStateOf(nx),
+                mutableStateOf(ny),
+                anglePower = random.nextFloat(),
+                sizeDeviationPower = (random.nextFloat() * 2) - 1,
+                image = images.random(random)
+            )
         }
+    }
 }
 
 fun generateImage(
     w: Int,
     h: Int,
-    size: Float,
+    scaleX: Float,
+    scaleY: Float,
     rotation: Float,
     sizeDeviation: Int,
 ): BufferedImage = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB).apply {
     elements.forEach { (x, y, anglePower, sizeDeviationPower, image) ->
-        val ds = size + size * sizeDeviationPower * (sizeDeviation / 100f)
+        val dsX = scaleX + scaleX * sizeDeviationPower * (sizeDeviation / 100f)
+        val dsY = scaleY + scaleY * sizeDeviationPower * (sizeDeviation / 100f)
         draw(
             image,
-            x,
-            y,
-            (image.width * ds).toInt(),
-            (image.height * ds).toInt(),
+            (x.value * w).toInt(),
+            (y.value * h).toInt(),
+            dsX,
+            dsY,
             rotation * anglePower,
-            .5,
-            .5,
         )
     }
 }
@@ -90,36 +99,38 @@ fun BufferedImage.draw(
     src: BufferedImage,
     startX: Int,
     startY: Int,
-    w: Int,
-    h: Int,
+    scaleX: Float,
+    scaleY: Float,
     rotation: Float,
-    anchorX: Double = 0.0,
-    anchorY: Double = 0.0,
+    anchorX: Double = 0.5,
+    anchorY: Double = 0.5,
 ) {
-    if (w == 0 || h == 0) return
-    if (w < 0 || h < 0) error("Negative w or h are unsupported")
+    if (scaleX < 0 || scaleY < 0) error("Negative scale are unsupported")
+    if (scaleX < 0.0001 || scaleY < 0.0001) return
     if (anchorX !in 0.0..1.0) error("Anchor is relative so it must be in 0..1 range")
     if (anchorY !in 0.0..1.0) error("Anchor is relative so it must be in 0..1 range")
-    val x = startX - (w * anchorX).toInt()
-    val y = startY - (h * anchorY).toInt()
-    val img = src.rotate(rotation.toDouble())
-    for (dx in 0 until w) {
-        for (dy in 0 until h) {
+    val img = src.transform {
+        scale(scaleX.toDouble(), scaleY.toDouble())
+        rotate(rotation.toDouble(), src.width / 2.0, src.height / 2.0)
+    }
+    val x = startX - (img.width * anchorX).toInt()
+    val y = startY - (img.height * anchorY).toInt()
+    for (dx in 0 until img.width) {
+        for (dy in 0 until img.height) {
             val setX = (x + dx).takeIf { it in 0 until width } ?: continue
             val setY = (y + dy).takeIf { it in 0 until height } ?: continue
-            val getX = (img.width.toDouble() / w * dx).takeIf { it < img.width }?.toInt() ?: continue
-            val getY = (img.height.toDouble() / h * dy).takeIf { it < img.height }?.toInt() ?: continue
-            val rgb = img.getRGB(getX, getY).takeIf { (it shr 24) and 0xFF > 127 } ?: continue
+            val rgb = img.getRGB(dx, dy).takeIf { (it shr 24) and 0xFF > 127 } ?: continue
             setRGB(setX, setY, rgb)
         }
     }
 }
 
-fun BufferedImage.rotate(radians: Double): BufferedImage = AffineTransformOp(AffineTransform().apply {
-    translate(width / 2.0, height / 2.0)
-    rotate(radians)
-    translate(-width / 2.0, -height / 2.0)
-}, AffineTransformOp.TYPE_BICUBIC).filter(this, null)
+inline fun BufferedImage.transform(transform: AffineTransform.() -> Unit): BufferedImage =
+    AffineTransformOp(
+        AffineTransform().apply(transform),
+        AffineTransformOp.TYPE_BICUBIC
+    ).filter(this, null)
+
 
 inline fun <T : Any> runOrNull(block: () -> T): T? = runCatching(block).getOrNull()
 
@@ -143,29 +154,24 @@ fun main() = application {
 
     val readImgs = remember { mutableStateListOf<BufferedImage>() }
 
-    var size by remember { mutableFloatStateOf(1f) }
+    var scale by remember { mutableFloatStateOf(1f) }
     var density by remember { mutableFloatStateOf(.5f) }
     var angleDeviation by remember { mutableFloatStateOf(0f) }
     var sizeDeviation by remember { mutableIntStateOf(0) }
     var fileReading: Job by remember { mutableStateOf(tasks.launch {}) }
     var generating: Job by remember { mutableStateOf(tasks.launch {}) }
+    var renderSize: IntSize? by remember { mutableStateOf(null) }
     var saving: Job = remember { tasks.launch {} }
     var resW by remember { mutableIntStateOf(1000) }
     var resH by remember { mutableIntStateOf(1000) }
-    var res by remember {
-        mutableStateOf(BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB))
-    }
     var picking by remember { mutableStateOf(Picking.None) }
-    fun regen() {
-        generating.cancel("Regenerating")
-        generating = tasks.launch(taskPool) {
-            res = generateImage(resW, resH, size, angleDeviation, sizeDeviation)
-        }
-    }
     AppTheme(darkTheme = false) {
         Window(
-            title = "BackFiller", onCloseRequest = ::exitApplication, state = windowState
-        ) {
+            title = "BackFiller", state = windowState, onCloseRequest = {
+                tasks.cancel()
+                taskPool.close()
+                exitApplication()
+            }) {
             Row(modifier = Modifier.background(MaterialTheme.colorScheme.background)) {
                 Column(
                     modifier = Modifier.weight(1f)
@@ -185,11 +191,11 @@ fun main() = application {
                         ) { Text("Select a directory") }
                     }
                     ParamSlider(
-                        label = "Size",
-                        value = size,
-                        valueRange = 0f..2f,
-                        onValueChange = { size = it; regen() },
-                        indicator = size.toString()
+                        label = "Scale",
+                        value = scale,
+                        valueRange = 0.1f..2f,
+                        onValueChange = { scale = it },
+                        indicator = scale.toString()
                     )
                     ParamSlider(
                         label = "Density",
@@ -202,7 +208,7 @@ fun main() = application {
                         label = "Angle deviation",
                         value = angleDeviation,
                         valueRange = 0f..(PI * 2).toFloat(),
-                        onValueChange = { angleDeviation = it; regen() },
+                        onValueChange = { angleDeviation = it },
                         indicator = "±%.2f°".format(Math.toDegrees(angleDeviation.toDouble()))
                     )
                     ParamSlider(
@@ -210,7 +216,7 @@ fun main() = application {
                         value = sizeDeviation.toFloat(),
                         valueRange = 0f..50f,
                         steps = 50,
-                        onValueChange = { sizeDeviation = it.toInt(); regen() },
+                        onValueChange = { sizeDeviation = it.toInt() },
                         indicator = "±$sizeDeviation%"
                     )
                     Row {
@@ -228,7 +234,6 @@ fun main() = application {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Button({
                             randomize(density, resW, resH, readImgs, random)
-                            regen()
                         }, modifier = Modifier.weight(1f).padding(10.dp)) {
                             Text("Generate")
                         }
@@ -259,12 +264,25 @@ fun main() = application {
                                 { picking = Picking.DirOut }, modifier = Modifier.weight(1f).padding(10.dp)
                             ) { Text("Select output directory") }
                             Button(modifier = Modifier.weight(1f).padding(10.dp), onClick = {
-                                val file = File(outDir, outName)
-                                file.mkdirs()
-                                file.createNewFile()
-                                saving.cancel("Restarting saving")
-                                saving = tasks.launch(taskPool) {
-                                    ImageIO.write(res, file.extension, file)
+                                saving.cancel("Restarting Save")
+                                saving = tasks.launch {
+                                    renderSize?.let { (w, h) ->
+                                        val scW = resW / w.toFloat()
+                                        val scH = resH / h.toFloat()
+                                        val res = generateImage(
+                                            resW,
+                                            resH,
+                                            scale * scW,
+                                            scale * scH,
+                                            angleDeviation,
+                                            sizeDeviation
+                                        )
+
+                                        val file = File(outDir, outName)
+                                        file.mkdirs()
+                                        file.createNewFile()
+                                        ImageIO.write(res, file.extension, file)
+                                    }
                                 }
                             }) {
                                 Text("Save")
@@ -273,18 +291,26 @@ fun main() = application {
                     }
                 }
                 Box(
-                    modifier = Modifier.weight(1f).padding(10.dp), contentAlignment = Alignment.Center
+                    modifier = Modifier.weight(1f).fillMaxSize().padding(10.dp)
+                        .onGloballyPositioned { renderSize = it.size }
+                        .border(
+                            5.dp,
+                            MaterialTheme.colorScheme.tertiary
+                        ).clipToBounds(),
+                    contentAlignment = Alignment.TopStart
                 ) {
-                    Image(
+                    /*Image(
                         res.toComposeImageBitmap(),
                         "Generated Image",
                         modifier = Modifier.fillMaxSize().border(5.dp, color = MaterialTheme.colorScheme.secondary)
-                    )/*if (generating.isActive)
+                    )*/
+                    renderSize?.let { ImagePreview(it, scale, angleDeviation, sizeDeviation) }
+                    if (saving.isActive)
                         CircularProgressIndicator(
-                            color = MaterialTheme.colorScheme.tertiary,
-                            strokeWidth = 10.dp,
-                            modifier = Modifier.size(100.dp)
-                        )*/
+                            Modifier.align(Alignment.Center).size(100.dp),
+                            color = MaterialTheme.colorScheme.secondary,
+                            strokeWidth = 10.dp
+                        )
                 }
             }
         }
@@ -318,6 +344,39 @@ fun main() = application {
             p?.let { outDir = it }
             picking = Picking.None
         }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun BoxScope.ImagePreview(
+    size: IntSize,
+    scale: Float,
+    rotation: Float,
+    sizeDeviation: Int,
+) {
+    for (element in elements) {
+        val img = element.image.transform {
+            val sc = scale + scale * element.sizeDeviationPower * (sizeDeviation / 100f)
+            scale(sc.toDouble(), sc.toDouble())
+            rotate((rotation * element.anglePower).toDouble(), element.image.width / 2.0, element.image.height / 2.0)
+        }
+        Image(
+            img.toComposeImageBitmap(), null,
+            Modifier
+                .absoluteOffset {
+                    IntOffset(
+                        x = (size.width * element.x.value - (img.width / 2)).toInt(),
+                        y = (size.height * element.y.value - (img.height / 2)).toInt()
+                    )
+                }
+                .onDrag { (dx, dy) ->
+                    element.x.value =
+                        (element.x.value * size.width + (dx)) / size.width
+                    element.y.value =
+                        (element.y.value * size.height + (dy)) / size.height
+                }
+        )
     }
 }
 
