@@ -25,8 +25,16 @@ compose.desktop {
     application {
         mainClass = "MainKt"
 
+        buildTypes.release.proguard {
+            optimize.set(true)
+            configurationFiles.from(project.file("./rules.pro"))
+        }
+
         nativeDistributions {
             targetFormats(TargetFormat.Exe)
+            windows {
+                includeAllModules = true
+            }
             packageName = "backfiller"
             packageVersion = "1.0.0"
         }
