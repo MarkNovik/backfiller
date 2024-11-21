@@ -17,9 +17,20 @@ repositories {
 
 dependencies {
     implementation(compose.desktop.currentOs)
+    implementation(compose.components.resources)
     implementation("org.jetbrains.compose.material3:material3:1.3.1")
     implementation("org.sejda.imageio:webp-imageio:0.1.6")
     implementation("com.darkrockstudios:mpfilepicker:3.1.0")
+}
+
+compose.resources {
+    publicResClass = true
+    generateResClass = always
+    packageOfResClass = "me.mark"
+    customDirectory(
+        sourceSetName = "main",
+        directoryProvider = provider { layout.projectDirectory.dir("/src/main/resources") }
+    )
 }
 
 compose.desktop {
@@ -35,6 +46,7 @@ compose.desktop {
             targetFormats(TargetFormat.Exe)
             windows {
                 includeAllModules = true
+                iconFile.set(project.file("./src/main/resources/drawable/icon.ico"))
             }
             packageName = "backfiller"
             packageVersion = "1.0.0"

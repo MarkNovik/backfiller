@@ -33,6 +33,8 @@ import javax.imageio.ImageIO
 import kotlin.math.PI
 import kotlin.random.Random
 import kotlin.random.nextInt
+import me.mark.Res
+import me.mark.icon
 
 const val STEP_MULTIPLIER = 30
 
@@ -175,7 +177,8 @@ fun main() = application {
                 tasks.cancel()
                 taskPool.close()
                 exitApplication()
-            }) {
+            }, icon = org.jetbrains.compose.resources.painterResource(Res.drawable.icon)
+        ) {
             Row(modifier = Modifier.background(MaterialTheme.colorScheme.background)) {
                 Column(
                     modifier = Modifier.weight(1f)
