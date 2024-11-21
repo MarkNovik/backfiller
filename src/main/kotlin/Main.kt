@@ -1,15 +1,17 @@
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.onDrag
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.input.pointer.PointerButton
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpSize
@@ -47,8 +49,8 @@ val random = Random(30)
 data class Element(
     val x: MutableState<Float>,
     val y: MutableState<Float>,
-    val anglePower: Float,
-    val sizeDeviationPower: Float,
+    val anglePower: MutableState<Float>,
+    val sizeDeviationPower: MutableState<Float>,
     val image: BufferedImage
 )
 
@@ -65,8 +67,8 @@ fun randomize(density: Float, w: Int, h: Int, images: List<BufferedImage>, rando
             Element(
                 mutableStateOf(nx),
                 mutableStateOf(ny),
-                anglePower = random.nextFloat(),
-                sizeDeviationPower = (random.nextFloat() * 2) - 1,
+                anglePower = mutableStateOf(random.nextFloat()),
+                sizeDeviationPower = mutableStateOf((random.nextFloat() * 2) - 1),
                 image = images.random(random)
             )
         }
@@ -82,15 +84,15 @@ fun generateImage(
     sizeDeviation: Int,
 ): BufferedImage = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB).apply {
     elements.forEach { (x, y, anglePower, sizeDeviationPower, image) ->
-        val dsX = scaleX + scaleX * sizeDeviationPower * (sizeDeviation / 100f)
-        val dsY = scaleY + scaleY * sizeDeviationPower * (sizeDeviation / 100f)
+        val dsX = scaleX + scaleX * sizeDeviationPower.value * (sizeDeviation / 100f)
+        val dsY = scaleY + scaleY * sizeDeviationPower.value * (sizeDeviation / 100f)
         draw(
             image,
             (x.value * w).toInt(),
             (y.value * h).toInt(),
             dsX,
             dsY,
-            rotation * anglePower,
+            rotation * anglePower.value,
         )
     }
 }
@@ -161,7 +163,7 @@ fun main() = application {
     var fileReading: Job by remember { mutableStateOf(tasks.launch {}) }
     var generating: Job by remember { mutableStateOf(tasks.launch {}) }
     var renderSize: IntSize? by remember { mutableStateOf(null) }
-    var saving: Job = remember { tasks.launch {} }
+    var saving: Job by remember { mutableStateOf(tasks.launch {}) }
     var resW by remember { mutableIntStateOf(1000) }
     var resH by remember { mutableIntStateOf(1000) }
     var picking by remember { mutableStateOf(Picking.None) }
@@ -233,7 +235,9 @@ fun main() = application {
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Button({
-                            randomize(density, resW, resH, readImgs, random)
+                            renderSize?.let { (w, h) ->
+                                randomize(density, w, h, readImgs, random)
+                            }
                         }, modifier = Modifier.weight(1f).padding(10.dp)) {
                             Text("Generate")
                         }
@@ -299,11 +303,6 @@ fun main() = application {
                         ).clipToBounds(),
                     contentAlignment = Alignment.TopStart
                 ) {
-                    /*Image(
-                        res.toComposeImageBitmap(),
-                        "Generated Image",
-                        modifier = Modifier.fillMaxSize().border(5.dp, color = MaterialTheme.colorScheme.secondary)
-                    )*/
                     renderSize?.let { ImagePreview(it, scale, angleDeviation, sizeDeviation) }
                     if (saving.isActive)
                         CircularProgressIndicator(
@@ -347,7 +346,11 @@ fun main() = application {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+enum class FocusMode {
+    None, Focus, Rotation
+}
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 fun BoxScope.ImagePreview(
     size: IntSize,
@@ -356,25 +359,71 @@ fun BoxScope.ImagePreview(
     sizeDeviation: Int,
 ) {
     for (element in elements) {
+        var x by element.x
+        var y by element.y
+        var sizeDeviationPower by element.sizeDeviationPower
+        var anglePower by element.anglePower
+        var focusMode by remember { mutableStateOf(FocusMode.None) }
+
         val img = element.image.transform {
-            val sc = scale + scale * element.sizeDeviationPower * (sizeDeviation / 100f)
+            val sc = scale + scale * sizeDeviationPower * (sizeDeviation / 100f)
             scale(sc.toDouble(), sc.toDouble())
-            rotate((rotation * element.anglePower).toDouble(), element.image.width / 2.0, element.image.height / 2.0)
+            rotate((rotation * anglePower).toDouble(), element.image.width / 2.0, element.image.height / 2.0)
         }
+
         Image(
             img.toComposeImageBitmap(), null,
             Modifier
                 .absoluteOffset {
                     IntOffset(
-                        x = (size.width * element.x.value - (img.width / 2)).toInt(),
-                        y = (size.height * element.y.value - (img.height / 2)).toInt()
+                        x = (size.width * x - (img.width / 2)).toInt(),
+                        y = (size.height * y - (img.height / 2)).toInt()
                     )
                 }
+                .onPointerEvent(PointerEventType.Scroll) {
+                    when (focusMode) {
+                        FocusMode.Focus -> {
+                            sizeDeviationPower =
+                                (sizeDeviationPower - it.changes.fold(0f) { acc, n -> acc + n.scrollDelta.y } / 50).coerceIn(
+                                    (-1f)..1f
+                                )
+                        }
+
+                        FocusMode.Rotation -> {
+                            anglePower =
+                                (anglePower - it.changes.fold(0f) { acc, n -> acc + n.scrollDelta.y } / 50).coerceIn(0f..1f)
+                        }
+
+                        else -> Unit
+                    }
+
+                }
+                .onPointerEvent(PointerEventType.Enter) {
+                    focusMode = FocusMode.Focus
+                }
+                .onPointerEvent(PointerEventType.Exit) {
+                    focusMode = FocusMode.None
+                }
+                .border(
+                    2.dp,
+                    when (focusMode) {
+                        FocusMode.None -> Color.Transparent
+                        FocusMode.Focus -> Color.Black
+                        FocusMode.Rotation -> Color.Red
+                    }
+                )
+                .onClick(
+                    matcher = PointerMatcher.mouse(PointerButton.Secondary),
+                    onClick = {
+                        focusMode =
+                            if (focusMode == FocusMode.Focus)
+                                FocusMode.Rotation
+                            else FocusMode.Focus
+                    }
+                )
                 .onDrag { (dx, dy) ->
-                    element.x.value =
-                        (element.x.value * size.width + (dx)) / size.width
-                    element.y.value =
-                        (element.y.value * size.height + (dy)) / size.height
+                    x += dx / size.width
+                    y += dy / size.height
                 }
         )
     }
