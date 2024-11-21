@@ -18,6 +18,7 @@ repositories {
 dependencies {
     implementation(compose.desktop.currentOs)
     implementation("org.jetbrains.compose.material3:material3:1.3.1")
+    implementation("org.sejda.imageio:webp-imageio:0.1.6")
     implementation("com.darkrockstudios:mpfilepicker:3.1.0")
 }
 

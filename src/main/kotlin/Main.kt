@@ -56,6 +56,8 @@ data class Element(
 
 var elements by mutableStateOf(emptyList<Element>())
 
+fun String.toPositiveIntOrNull() = toIntOrNull()?.takeIf { it > 0 }
+
 fun randomize(density: Float, w: Int, h: Int, images: List<BufferedImage>, random: Random) {
     val stepX = (1 / density).toInt() * STEP_MULTIPLIER
     val stepY = (1 / density).toInt() * STEP_MULTIPLIER
@@ -148,7 +150,7 @@ val taskPool = newSingleThreadContext("App pool")
 @OptIn(ExperimentalCoroutinesApi::class)
 val tasks = CoroutineScope(taskPool)
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalCoroutinesApi::class, ExperimentalComposeUiApi::class)
 fun main() = application {
     var path by remember { mutableStateOf(File.listRoots()?.firstOrNull()?.absolutePath ?: "/") }
     var outDir by remember { mutableStateOf(File(path, "out").absolutePath) }
@@ -164,8 +166,8 @@ fun main() = application {
     var generating: Job by remember { mutableStateOf(tasks.launch {}) }
     var renderSize: IntSize? by remember { mutableStateOf(null) }
     var saving: Job by remember { mutableStateOf(tasks.launch {}) }
-    var resW by remember { mutableIntStateOf(1000) }
-    var resH by remember { mutableIntStateOf(1000) }
+    var textW by remember { mutableStateOf("1000") }
+    var textH by remember { mutableStateOf("1000") }
     var picking by remember { mutableStateOf(Picking.None) }
     AppTheme(darkTheme = false) {
         Window(
@@ -211,7 +213,7 @@ fun main() = application {
                         value = angleDeviation,
                         valueRange = 0f..(PI * 2).toFloat(),
                         onValueChange = { angleDeviation = it },
-                        indicator = "±%.2f°".format(Math.toDegrees(angleDeviation.toDouble()))
+                        indicator = "%.2f°".format(Math.toDegrees(angleDeviation.toDouble()))
                     )
                     ParamSlider(
                         label = "Size deviation",
@@ -223,14 +225,14 @@ fun main() = application {
                     )
                     Row {
                         TextField(
-                            resW.toString(),
-                            { resW = it.filter(Char::isDigit).toIntOrNull() ?: resW },
+                            textW, { textW = it },
                             modifier = Modifier.weight(1f),
+                            isError = textW.toPositiveIntOrNull() == null,
                             label = { Text("Image width") })
                         TextField(
-                            resH.toString(),
-                            { resH = it.filter(Char::isDigit).toIntOrNull() ?: resH },
+                            textH, { textH = it },
                             modifier = Modifier.weight(1f),
+                            isError = textH.toPositiveIntOrNull() == null,
                             label = { Text("Image height") })
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -270,6 +272,8 @@ fun main() = application {
                             Button(modifier = Modifier.weight(1f).padding(10.dp), onClick = {
                                 saving.cancel("Restarting Save")
                                 saving = tasks.launch {
+                                    val resW = textW.toIntOrNull() ?: return@launch
+                                    val resH = textH.toIntOrNull() ?: return@launch
                                     renderSize?.let { (w, h) ->
                                         val scW = resW / w.toFloat()
                                         val scH = resH / h.toFloat()
@@ -294,8 +298,15 @@ fun main() = application {
                         }
                     }
                 }
+                val w = textW.toPositiveIntOrNull()?.toFloat() ?: 1f
+                val h = textH.toPositiveIntOrNull() ?: 1
                 Box(
-                    modifier = Modifier.weight(1f).fillMaxSize().padding(10.dp)
+                    modifier = Modifier
+                        .align(Alignment.CenterVertically)
+                        .aspectRatio(w / h, true)
+                        .weight(1f)
+                        .fillMaxSize()
+                        .padding(10.dp)
                         .onGloballyPositioned { renderSize = it.size }
                         .border(
                             5.dp,
@@ -313,7 +324,7 @@ fun main() = application {
                 }
             }
         }
-        MultipleFilePicker(picking == Picking.FileIn, path, listOf("png, jpeg"), "Select a picture") { list ->
+        MultipleFilePicker(picking == Picking.FileIn, path, listOf("png, jpeg", "webp"), "Select a picture") { list ->
             list?.let { files ->
                 path = files.joinToString(", ") { File(it.path).name }
                 fileReading.cancel()
